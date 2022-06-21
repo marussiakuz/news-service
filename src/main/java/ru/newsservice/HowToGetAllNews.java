@@ -1,3 +1,5 @@
+package ru.newsservice;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.sun.syndication.feed.synd.SyndEntry;
@@ -5,36 +7,63 @@ import com.sun.syndication.feed.synd.SyndFeed;
 import com.sun.syndication.io.FeedException;
 import com.sun.syndication.io.SyndFeedInput;
 import com.sun.syndication.io.XmlReader;
+import ru.newsservice.model.News;
+import ru.newsservice.model.NewsAggregator;
 
 import java.io.IOException;
 import java.net.URL;
 import java.net.URLConnection;
-import java.util.List;
-import java.util.Map;
+import java.time.Instant;
+import java.util.*;
 
 public class HowToGetAllNews {
 
-    public static void main(String[] args) {
+    public static List<News> getAllNews(NewsAggregator newsAggregator) {
+        List<News> news = new ArrayList<>();
 
         HowToGetAllNews app = new HowToGetAllNews();
 
-        //пролучаем адреса rss из файла с ресурсами
         Map<String, String> sources = app.getSources();
 
-        //берем например yandex и получаем из него SyndFeed
-        SyndFeed feed = app.feedFromUrl(sources.get("yandex"));
-
-        //в фиде содержится коллекция FeedEntry, получим ее
-        if (feed != null) {
-            // к сожалению метод getEntries возвоащает коллекцию Object'ов
-            // поэтому возможно где то понадобится приведение
-            List<SyndEntry> entries = feed.getEntries();
-
-            // выведем у первой полученной новости заголовок и описание
-            SyndEntry entry = entries.get(0);
-            System.out.println(entry.getTitle());
-            System.out.println(entry.getDescription().getValue());
+        for (String url : sources.values()) {
+            List<News> newsFromOneChannel = getNewsFromOneChannel(url, newsAggregator.getHours(), newsAggregator.getKeyWords());
+            if (!newsFromOneChannel.isEmpty()) news.addAll(newsFromOneChannel);
         }
+        return news;
+    }
+
+    private static List<News> getNewsFromOneChannel(String url, int hours, List<String> keyWords) {
+        List<News> news = new ArrayList<>();
+
+        HowToGetAllNews app = new HowToGetAllNews();
+
+        SyndFeed feed = app.feedFromUrl(url);
+
+        if (feed == null) return news;
+
+        List<SyndEntry> entries = feed.getEntries();
+
+        long millis = Instant.now().toEpochMilli();
+        long hoursToMillis = hours * 3_600_000L;
+
+        for (SyndEntry entry : entries) {
+            if (entry.getPublishedDate().getTime() < (millis - hoursToMillis)) continue;
+            if (app.doesContainAllKeyWords((entry.getTitle() + entry.getDescription()), keyWords))
+                news.add(News.builder()
+                        .title(entry.getTitle())
+                        .desc(entry.getDescription().getValue())
+                        .link(entry.getLink())
+                        .date(entry.getPublishedDate())
+                        .build());
+        }
+        return news;
+    }
+
+    private boolean doesContainAllKeyWords(String str, List<String> keyWords) {
+        for (String keyWord : keyWords) {
+            if (!str.toLowerCase(Locale.ROOT).contains(keyWord.toLowerCase(Locale.ROOT))) return false;
+        }
+        return true;
     }
 
     /**
