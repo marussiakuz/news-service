@@ -1,4 +1,4 @@
-package ru.newsservice;
+package ru.newsservice.repository;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
@@ -7,74 +7,68 @@ import com.sun.syndication.feed.synd.SyndFeed;
 import com.sun.syndication.io.FeedException;
 import com.sun.syndication.io.SyndFeedInput;
 import com.sun.syndication.io.XmlReader;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.stereotype.Component;
 import ru.newsservice.model.News;
-import ru.newsservice.model.NewsAggregator;
 
 import java.io.IOException;
 import java.net.URL;
 import java.net.URLConnection;
 import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
-public class HowToGetAllNews {
+@Slf4j
+@Component
+public class NewsFinderImpl implements NewsFinder {
 
-    public static List<News> getAllNews(NewsAggregator newsAggregator) {
-        List<News> news = new ArrayList<>();
+    private static final Map<String, String> SOURCES = getSources();
 
-        HowToGetAllNews app = new HowToGetAllNews();
-
-        Map<String, String> sources = app.getSources();
-
-        for (String url : sources.values()) {
-            List<News> newsFromOneChannel = getNewsFromOneChannel(url, newsAggregator.getHours(), newsAggregator.getKeyWords());
-            if (!newsFromOneChannel.isEmpty()) news.addAll(newsFromOneChannel);
-        }
-        return news;
+    @Override
+    @Cacheable(value="news")
+    public List<News> findAllNews(long minMillis) {
+        log.info("searches for all the news for the last {} hours",
+                (Instant.now().toEpochMilli() - minMillis)/3_600_000L);
+        return SOURCES.values().stream()
+                .map(url -> getNewsFromOneChannel(url, minMillis))
+                .filter(news -> !news.isEmpty())
+                .flatMap(List::stream)
+                .sorted((n1, n2) -> n2.getDate().compareTo(n1.getDate()))
+                .collect(Collectors.toList());
     }
-
-    private static List<News> getNewsFromOneChannel(String url, int hours, List<String> keyWords) {
+    private static List<News> getNewsFromOneChannel(String url, long minMillis) {
         List<News> news = new ArrayList<>();
 
-        HowToGetAllNews app = new HowToGetAllNews();
-
-        SyndFeed feed = app.feedFromUrl(url);
+        SyndFeed feed = feedFromUrl(url);
 
         if (feed == null) return news;
 
         List<SyndEntry> entries = feed.getEntries();
 
-        long millis = Instant.now().toEpochMilli();
-        long hoursToMillis = hours * 3_600_000L;
-
         for (SyndEntry entry : entries) {
-            if (entry.getPublishedDate().getTime() < (millis - hoursToMillis)) continue;
-            if (app.doesContainAllKeyWords((entry.getTitle() + entry.getDescription()), keyWords))
-                news.add(News.builder()
-                        .title(entry.getTitle())
-                        .desc(entry.getDescription().getValue())
-                        .link(entry.getLink())
-                        .date(entry.getPublishedDate())
-                        .build());
+            if (entry.getPublishedDate().getTime() < minMillis) continue;
+            news.add(News.builder()
+                    .title(entry.getTitle())
+                    .desc(entry.getDescription() == null? "" : entry.getDescription().getValue())
+                    .link(entry.getLink())
+                    .date(entry.getPublishedDate())
+                    .build());
         }
         return news;
-    }
-
-    private boolean doesContainAllKeyWords(String str, List<String> keyWords) {
-        for (String keyWord : keyWords) {
-            if (!str.toLowerCase(Locale.ROOT).contains(keyWord.toLowerCase(Locale.ROOT))) return false;
-        }
-        return true;
     }
 
     /**
      * Считывает из yaml файла адреса rss и возвращает их как значения Map
      */
-    private Map<String, String> getSources() {
+    private static Map<String, String> getSources() {
         ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
         try {
             return mapper.readValue(
-                            HowToGetAllNews.class.getResource("/sources.yml"),
-                            SourceList.class)
+                            NewsFinderImpl.class.getResource("/sources.yml"),
+                            NewsFinderImpl.SourceList.class)
                     .getSources();
         } catch (IOException e) {
             throw new RuntimeException(e);
@@ -87,7 +81,7 @@ public class HowToGetAllNews {
      * @param url
      * @return SyndFeed - объект из пакета rome
      */
-    private SyndFeed feedFromUrl(String url) {
+    private static SyndFeed feedFromUrl(String url) {
         final int TIMEOUT = 1000;
         try {
             URLConnection conn = new URL(url).openConnection();

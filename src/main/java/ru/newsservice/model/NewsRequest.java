@@ -11,7 +11,7 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class NewsAggregator {
-    private List<String> keyWords;
-    private Integer hours;
+public class NewsRequest {
+    private List<String> keywords;
+    private int hours;
 }
